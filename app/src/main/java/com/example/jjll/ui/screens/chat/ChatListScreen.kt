@@ -15,172 +15,178 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.jjll.R
+import com.example.jjll.data.ChatListItem
 import com.example.jjll.data.UserProfile
-import com.example.jjll.ui.theme.JJLLTheme
+import com.example.jjll.ui.navigation.AppDestinations
 
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatListScreen(
-    viewModel: ChatListViewModel = hiltViewModel(),
-    onChatClick: (userId: String, userName: String?) -> Unit // 修改回調，傳遞用戶名用於詳情頁標題
+    navController: NavController,
+    viewModel: ChatListViewModel = hiltViewModel() // 注入 ViewModel
 ) {
-    val uiState by viewModel.uiState
+    // --- 狀態收集 ---
+    val chatList by viewModel.chatList.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        when {
-            uiState.isLoading -> {
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-            }
-            uiState.error != null -> {
-                Column(
-                    modifier = Modifier.align(Alignment.Center).padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "加載列表失敗: ${uiState.error}",
-                        color = MaterialTheme.colorScheme.error,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(onClick = { viewModel.loadChatPartners() }) {
-                        Text("重試")
-                    }
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text("聊天") })
+            // 可在此添加例如 "創建群聊" 等操作按鈕
+            /*
+            actions = {
+                IconButton(onClick = { /* TODO: Navigate to create group screen */ }) {
+                    Icon(Icons.Default.GroupAdd, contentDescription = "創建群聊")
                 }
             }
-            uiState.chatPartners.isEmpty() -> {
-                Text(
-                    text = "還沒有開始任何聊天。\n從通訊錄中找人開始聊天吧！",
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.align(Alignment.Center).padding(16.dp)
-                )
-            }
-            else -> {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(uiState.chatPartners, key = { it.user_id }) { partner ->
-                        // 可以復用 ContactItem，或創建一個 ChatListItem
-                        ChatListItem(
-                            userProfile = partner,
-                            // TODO: 後期顯示真實的 lastMessage 和 timestamp
-                            lastMessage = "點擊開始聊天...", // 佔位符
-                            timestamp = "", // 佔位符
-                            unreadCount = 0, // 佔位符
-                            onClick = {
-                                val partnerName = partner.display_name ?: partner.username
-                                onChatClick(partner.user_id, partnerName)
-                            }
-                        )
-                        Divider(modifier = Modifier.padding(start = 72.dp)) // 左側縮進
-                    }
+            */
+        }
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues) // 應用 Scaffold 的內邊距
+        ) {
+            when {
+                // 正在加載時顯示指示器
+                isLoading -> {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                }
+                // 出錯時顯示錯誤信息
+                error != null -> {
+                    Text(
+                        text = "錯誤: $error",
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(16.dp)
+                    )
+                }
+                // 列表為空時顯示提示信息
+                chatList.isEmpty() -> {
+                    Text(
+                        "暫無聊天記錄，快去通訊錄找好友聊天吧！", // 提供更友好的提示
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(16.dp)
+                    )
+                }
+                // 顯示聊天列表
+                else -> {
+                    ChatListContent(
+                        chatList = chatList,
+                        onChatItemClick = { userProfile ->
+                            // 導航到聊天詳情頁
+                            navController.navigate(
+                                AppDestinations.ChatDetail.buildRoute(
+                                    userId = userProfile.userId,
+                                    // 提供默認值或處理 username 為 null 的情況
+                                    username = userProfile.username ?: "用戶"
+                                )
+                            )
+                        }
+                    )
                 }
             }
         }
     }
 }
 
-// 聊天列表項 Composable (可以基於 ContactItem 修改)
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChatListItem(
-    userProfile: UserProfile,
-    lastMessage: String,
-    timestamp: String, // 後期改為合適的時間類型
-    unreadCount: Int,
+fun ChatListContent(
+    chatList: List<ChatListItem>,
+    onChatItemClick: (UserProfile) -> Unit // 回調點擊事件，傳遞對方 Profile
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(vertical = 0.dp) // 列表上下邊距通過 Divider 控制
+    ) {
+        items(chatList, key = { it.partnerProfile.userId }) { chatItem -> // 使用對方用戶 ID 作為 key
+            ChatListItemView(
+                chatItem = chatItem,
+                onClick = { onChatItemClick(chatItem.partnerProfile) } // 點擊時回調
+            )
+            HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant) // 添加分隔線
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class) // ListItem 需要
+@Composable
+fun ChatListItemView(
+    chatItem: ChatListItem,
     onClick: () -> Unit
 ) {
-    ListItem(
-        modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 8.dp), // 給 Item 自身加點水平邊距
+    ListItem( // 調用 Material 3 的 ListItem
+        modifier = Modifier.clickable(onClick = onClick),
+        // --- 修改這裡：使用 headlineContent ---
         headlineContent = {
             Text(
-                text = userProfile.display_name ?: userProfile.username,
-                fontWeight = FontWeight.SemiBold, // 姓名加粗一些
+                text = chatItem.partnerProfile.displayName ?: chatItem.partnerProfile.username ?: "未知用戶",
+                fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
         },
+        // --- 修改這裡：使用 supportingContent ---
         supportingContent = {
             Text(
-                text = lastMessage, // 顯示最後一條消息摘要
-                style = MaterialTheme.typography.bodyMedium,
+                text = chatItem.lastMessage?.content ?: "",
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurfaceVariant // 摘要顏色淺一點
-            )
-        },
-        leadingContent = {
-            // 可以考慮在頭像上加未讀消息紅點 (需要 Box 包裹)
-            Box {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(userProfile.avatar_url)
-                        .crossfade(true)
-                        .placeholder(R.drawable.ic_avatar_placeholder)
-                        .error(R.drawable.ic_avatar_placeholder)
-                        .fallback(R.drawable.ic_avatar_placeholder)
-                        .build(),
-                    contentDescription = "${userProfile.username} 的頭像",
-                    modifier = Modifier.size(56.dp).clip(CircleShape), // 列表頭像可以大一點
-                    contentScale = ContentScale.Crop
-                )
-                // 未讀紅點 (示例)
-                if (unreadCount > 0) {
-                    Badge(modifier = Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 4.dp)) {
-                        // Text("$unreadCount") // 顯示數字，如果空間夠的話
-                    }
-                }
-            }
-        },
-        trailingContent = {
-            // 顯示時間戳
-            Text(
-                text = timestamp,
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        },
+        // --- leadingContent 名稱正確 ---
+        leadingContent = {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(chatItem.partnerProfile.avatarURL)
+                    .crossfade(true)
+                    .placeholder(R.drawable.ic_placeholder_person)
+                    .error(R.drawable.ic_placeholder_person)
+                    .build(),
+                contentDescription = "對話夥伴頭像",
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop
+            )
+        },
+        // --- trailingContent 名稱正確 ---
+        trailingContent = {
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = formatTimestampRelative(chatItem.lastMessage?.timestamp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                // 可選：未讀標記
+            }
         }
+        // --- 其他 ListItem 參數，如 colors, tonalElevation 等可以根據需要添加 ---
+        // colors = ListItemDefaults.colors(...)
+        // tonalElevation = ListItemDefaults.Elevation // 默認可能已有
     )
 }
 
-
-// --- Preview ---
-@Preview(showBackground = true)
-@Composable
-fun ChatListScreenPreview_Empty() {
-    JJLLTheme {
-        Surface{
-            Box(modifier = Modifier.fillMaxSize()) {
-                Text(
-                    text = "還沒有開始任何聊天。\n從通訊錄中找人開始聊天吧！",
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.align(Alignment.Center).padding(16.dp)
-                )
-            }
-        }
-    }
+// 輔助函數：格式化相對時間戳 (需要您自己實現或引入庫)
+fun formatTimestampRelative(timestamp: String?): String {
+    // 實現將 ISO 8601 字符串轉換為相對時間，例如：
+    // "剛剛", "5分鐘前", "昨天 10:30", "10/27" 等
+    // 這通常需要日期時間處理庫 (如 kotlinx-datetime 或 ThreeTenABP)
+    return timestamp?.take(10) ?: "" // 極簡示例
 }
 
-@Preview(showBackground = true, widthDp = 360)
-@Composable
-fun ChatListItemPreview() {
-    JJLLTheme {
-        val previewProfile = UserProfile("prev_id", "preview_user", "聊天對象預覽")
-        Surface {
-            ChatListItem(
-                userProfile = previewProfile,
-                lastMessage = "這是最後一條消息的預覽...",
-                timestamp = "昨天",
-                unreadCount = 3,
-                onClick = {}
-            )
-        }
-    }
-}
+// 確保您在 res/drawable 文件夾下有名為 ic_placeholder_person.xml 的資源文件

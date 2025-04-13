@@ -11,233 +11,172 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 import android.util.Log
 import com.example.jjll.common.RepoResult
+import com.example.jjll.data.JJLLAuthException
 import com.example.jjll.data.ProfileRepository
 import com.example.jjll.data.UserProfile
 import com.example.jjll.ui.auth.AuthRepository
 import kotlin.collections.map
 
-private const val TAG = "ContactsViewModel"
-private const val SEARCH_DEBOUNCE_MS = 300L
-
-// 更新 UI State 以包含 pending requests
-data class ContactsUiState(
-    // 已接受聯繫人狀態
-    val contacts: List<UserProfile> = emptyList(),
-    val isLoadingContacts: Boolean = false,
-    val contactsError: String? = null,
-
-    // 待處理請求狀態
-    val pendingRequests: List<PendingRequest> = emptyList(),
-    val isLoadingPending: Boolean = false,
-    val pendingError: String? = null,
-
-    // 用戶搜索狀態
-    val searchQuery: String = "",
-    val searchResults: List<UserProfile> = emptyList(),
-    val isSearching: Boolean = false,
-    val searchError: String? = null,
-
-    // 操作結果提示 (例如 Snackbar)
-    val actionResult: String? = null // 合併 addContactResult
-)
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+/*
+狀態管理: 使用 StateFlow 來管理好友請求列表 (_friendRequests)、聯繫人列表 (_contacts)、加載狀態 (_isLoading) 和錯誤信息 (_error)。
+依賴注入: 正確注入了 ContactRepository 和 AuthRepository。
+初始化: 在 init 塊中獲取當前用戶 ID，並調用 loadFriendRequests() 和 loadContacts() 來加載初始數據。
+加載邏輯:
+loadFriendRequests(): 調用 contactRepository.getFriendRequests(userId) 來獲取待處理的請求。
+loadContacts(): 調用 contactRepository.getAcceptedContacts(userId) 來獲取已接受的聯繫人。
+請求處理: 提供了 acceptFriendRequest(senderId) 和 rejectFriendRequest(senderId) 方法，它們調用 ContactRepository 中的相應方法來更新狀態，並在成功後重新加載兩個列表 (loadFriendRequests() 和 loadContacts()) 以刷新 UI。這一步非常關鍵且正確！
+搜索對話框: 提供了控制搜索用戶對話框顯示/隱藏的方法。
+* */
 
 @HiltViewModel
 class ContactsViewModel @Inject constructor(
-    private val contactRepository: ContactRepository,
-    private val profileRepository: ProfileRepository,
-    private val authRepository: AuthRepository // 保持注入 AuthRepository 以獲取 userId
+    private val contactRepository: ContactRepository, // 注入 ContactRepository
+    private val authRepository: AuthRepository    // 注入 AuthRepository
 ) : ViewModel() {
 
-    private val _uiState = mutableStateOf(ContactsUiState())
-    val uiState: State<ContactsUiState> = _uiState
+    // 使用 UserProfile 類型
+    private val _friendRequests = MutableStateFlow<List<UserProfile>>(emptyList())
+    val friendRequests: StateFlow<List<UserProfile>> = _friendRequests.asStateFlow()
 
-    private var searchJob: Job? = null
+    // 使用 UserProfile 類型
+    private val _contacts = MutableStateFlow<List<UserProfile>>(emptyList())
+    val contacts: StateFlow<List<UserProfile>> = _contacts.asStateFlow()
+
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
+    private val _isSearching = MutableStateFlow(false)
+    val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
+
+    private var currentUserId: String? = null
 
     init {
-        // 初始化時同時加載兩種列表
-        loadAcceptedContacts()
-        loadPendingRequests()
-    }
-
-    // --- 加載已接受聯繫人 ---
-    fun loadAcceptedContacts() {
-        _uiState.value =
-            _uiState.value.copy(isLoadingContacts = true, contactsError = null, actionResult = null)
         viewModelScope.launch {
-            when (val result = contactRepository.getAcceptedContacts()) {
-                //RepoResult 的返回： 確認方法最終返回的是 RepoResult.Success(profiles) 並且 profiles 列表不為空
-                is RepoResult.Success -> {
-                    _uiState.value =
-                        _uiState.value.copy(isLoadingContacts = false, contacts = result.data) // <-- 確保 result.data 被正確賦值給 uiState.contacts
-                    Log.i(TAG, "Accepted contacts loaded: ${result.data.size}")  // <-- 確認這裡打印的 size > 0
+            try {
+                // 獲取當前用戶 ID (假設 AuthRepository 返回 String?)
+                currentUserId = authRepository.getCurrentUserId()
+                if (currentUserId == null) {
+                    _error.value = "用戶未登錄。"
+                    Log.e("ContactsViewModel", "Current User ID is null.")
+                    return@launch
                 }
-
-                is RepoResult.Error -> {
-                    _uiState.value = _uiState.value.copy(
-                        isLoadingContacts = false,
-                        contactsError = result.message
-                    )
-                    Log.e(TAG, "Error loading contacts: ${result.message}", result.exception)
-                }
-
-                else -> _uiState.value =
-                    _uiState.value.copy(isLoadingContacts = false) // 確保結束 Loading
+                Log.d("ContactsViewModel", "Current User ID: $currentUserId")
+                // 加載初始數據
+                loadFriendRequests()
+                loadContacts()
+            } catch (e: JJLLAuthException) {
+                Log.e("ContactsViewModel", "Auth error during init", e)
+                _error.value = "認證錯誤: ${e.message}。請重新登錄。"
+            } catch (e: Exception) {
+                Log.e("ContactsViewModel", "Error during initialization", e)
+                _error.value = "初始化失敗: ${e.message}"
             }
         }
     }
 
-    // --- 加載待處理請求 ---
-    fun loadPendingRequests() {
-        _uiState.value =
-            _uiState.value.copy(isLoadingPending = true, pendingError = null, actionResult = null)
+    fun loadFriendRequests() {
+        val userId = currentUserId ?: return // 確保用戶 ID 可用
         viewModelScope.launch {
-            when (val result = contactRepository.getPendingRequests()) {
-                is RepoResult.Success -> {
-                    _uiState.value =
-                        _uiState.value.copy(isLoadingPending = false, pendingRequests = result.data)
-                    Log.i(TAG, "Pending requests loaded: ${result.data.size}")
-                }
-
-                is RepoResult.Error -> {
-                    _uiState.value =
-                        _uiState.value.copy(isLoadingPending = false, pendingError = result.message)
-                    Log.e(
-                        TAG,
-                        "Error loading pending requests: ${result.message}",
-                        result.exception
-                    )
-                }
-
-                else -> _uiState.value = _uiState.value.copy(isLoadingPending = false)
+            _isLoading.value = true
+            _error.value = null // 清除之前的錯誤
+            try {
+                Log.d("ContactsViewModel", "Loading friend requests for user: $userId")
+                // 調用 ContactRepository 的方法
+                _friendRequests.value = contactRepository.getFriendRequests(userId)
+                Log.d("ContactsViewModel", "Loaded ${_friendRequests.value.size} friend requests.")
+            } catch (e: Exception) {
+                Log.e("ContactsViewModel", "Error loading friend requests", e)
+                _error.value = "加載好友請求失敗: ${e.message}"
+                _friendRequests.value = emptyList() // 出錯時清空列表
+            } finally {
+                // 考慮到 loadContacts() 也會設置 isLoading，這裡可能不需要立即設置為 false
+                // 但如果兩個加載是獨立的 UI 反饋，則需要更精細的控制
             }
         }
     }
 
-    // --- 搜索邏輯 (保持不變，但過濾時可能需要考慮 pending) ---
-    fun onSearchQueryChange(query: String) {
-        _uiState.value =
-            _uiState.value.copy(searchQuery = query, searchError = null, actionResult = null)
-        searchJob?.cancel()
-        if (query.isBlank() || query.length < 2) {
-            _uiState.value = _uiState.value.copy(searchResults = emptyList(), isSearching = false)
-            return
-        }
-        _uiState.value = _uiState.value.copy(isSearching = true)
-        searchJob = viewModelScope.launch {
-            delay(SEARCH_DEBOUNCE_MS)
-            Log.d(TAG, "Debounced search triggered for query: $query")
-            when (val result = profileRepository.searchUsersByUsername(query)) {
-
-                else -> {
-                    val currentContactsIds = _uiState.value.contacts.map { it.user_id }.toSet()
-                    // 考慮：是否也要排除已發送請求但對方未處理的人？
-                    // val pendingSentIds = // ... 需要額外查詢 ...
-                    val currentUserId = authRepository.getCurrentUserId()
-                    if (currentUserId == null) {
-                        Log.w(TAG, "Current user ID null in search filter"); }
-                    // 顯式轉換 result 為 Success 類型
-                    val successResult = result as RepoResult.Success<List<UserProfile>>
-                    val filteredResults = successResult.data.filter { // <-- 現在可以訪問 data
-                        (currentUserId == null || it.user_id != currentUserId) && !currentContactsIds.contains(
-                            it.user_id
-                        )
-                    }
-                    _uiState.value = _uiState.value.copy(
-                        isSearching = false,
-                        searchResults = filteredResults
-                    )
-                    Log.i(TAG, "Search results loaded for '$query': ${filteredResults.size}")
-                }
-            }
-        }
-    }
-
-    // --- 發送聯繫人請求 (保持不變) ---
-    fun sendContactRequest(contactUserId: String) {
-        _uiState.value = _uiState.value.copy(actionResult = null)
+    fun loadContacts() {
+        val userId = currentUserId ?: return // 確保用戶 ID 可用
         viewModelScope.launch {
-            Log.d(TAG, "Sending contact request to $contactUserId")
-            when (val result = contactRepository.addContact(contactUserId)) {
-                is RepoResult.Success -> {
-                    _uiState.value = _uiState.value.copy(actionResult = "好友請求已發送")
-                }
-
-                is RepoResult.Error -> {
-                    _uiState.value =
-                        _uiState.value.copy(actionResult = "發送失敗: ${result.message}")
-                }
-
-                else -> {}
+            _isLoading.value = true // 假設開始加載整個屏幕
+            _error.value = null // 清除之前的錯誤
+            try {
+                Log.d("ContactsViewModel", "Loading accepted contacts for user: $userId")
+                // 調用 ContactRepository 的方法
+                _contacts.value = contactRepository.getAcceptedContacts(userId)
+                Log.d("ContactsViewModel", "Loaded ${_contacts.value.size} contacts.")
+            } catch (e: Exception) {
+                Log.e("ContactsViewModel", "Error loading contacts", e)
+                _error.value = "加載聯繫人失敗: ${e.message}"
+                _contacts.value = emptyList() // 出錯時清空列表
+            } finally {
+                _isLoading.value = false // 在兩個加載都嘗試完成後設置為 false
             }
-            // 清除搜索結果中已發送的用戶 (可選)
-            _uiState.value =
-                _uiState.value.copy(searchResults = _uiState.value.searchResults.filterNot { it.user_id == contactUserId })
         }
     }
 
-    // --- 新增：接受聯繫人請求 ---
-    fun acceptContactRequest(contactId: Long) {
-        _uiState.value = _uiState.value.copy(actionResult = null) // 清除舊消息
+    fun acceptFriendRequest(senderId: String) {
+        val receiverId = currentUserId ?: return // 確保接收者 ID (當前用戶) 可用
         viewModelScope.launch {
-            Log.d(TAG, "Accepting contact request with id: $contactId")
-            when (val result = contactRepository.updateContactStatus(contactId, "accepted")) {
-                is RepoResult.Success -> {
-                    _uiState.value = _uiState.value.copy(actionResult = "已添加好友")
-                    Log.i(TAG, "Contact request accepted successfully (id: $contactId)")
-                    // 重要：刷新兩個列表
-                    loadAcceptedContacts()
-                    loadPendingRequests()
-                }
-
-                is RepoResult.Error -> {
-                    _uiState.value =
-                        _uiState.value.copy(actionResult = "接受請求失敗: ${result.message}")
-                    Log.e(
-                        TAG,
-                        "Error accepting contact request (id: $contactId): ${result.message}"
-                    )
-                }
-
-                else -> {}
+            _isLoading.value = true // 指示正在處理
+            _error.value = null
+            try {
+                Log.d("ContactsViewModel", "Accepting friend request from $senderId for $receiverId")
+                // 調用 ContactRepository 的方法
+                contactRepository.acceptFriendRequest(senderId, receiverId)
+                Log.i("ContactsViewModel", "Friend request from $senderId accepted.")
+                // 接受成功後，刷新好友請求列表和聯繫人列表
+                loadFriendRequests()
+                loadContacts() // 會在結束時將 isLoading 設為 false
+            } catch (e: Exception) {
+                Log.e("ContactsViewModel", "Error accepting friend request", e)
+                _error.value = "接受請求失敗: ${e.message}"
+                _isLoading.value = false // 確保出錯時停止加載狀態
             }
         }
     }
 
-    // --- 新增：拒絕/忽略聯繫人請求 ---
-    fun rejectContactRequest(contactId: Long) {
-        _uiState.value = _uiState.value.copy(actionResult = null)
+    fun rejectFriendRequest(senderId: String) {
+        val receiverId = currentUserId ?: return // 確保接收者 ID (當前用戶) 可用
         viewModelScope.launch {
-            // 我們選擇更新狀態為 'blocked' 來表示拒絕/忽略
-            // RLS 策略允許 pending -> blocked
-            Log.d(TAG, "Rejecting contact request with id: $contactId by setting status to blocked")
-            when (val result = contactRepository.updateContactStatus(contactId, "blocked")) {
-                is RepoResult.Success -> {
-                    _uiState.value = _uiState.value.copy(actionResult = "已忽略好友請求")
-                    Log.i(TAG, "Contact request rejected successfully (id: $contactId)")
-                    // 只刷新待處理列表
-                    loadPendingRequests()
-                }
-
-                is RepoResult.Error -> {
-                    _uiState.value =
-                        _uiState.value.copy(actionResult = "忽略請求失敗: ${result.message}")
-                    Log.e(
-                        TAG,
-                        "Error rejecting contact request (id: $contactId): ${result.message}"
-                    )
-                }
-
-                else -> {}
+            _isLoading.value = true // 指示正在處理
+            _error.value = null
+            try {
+                Log.d("ContactsViewModel", "Rejecting friend request from $senderId for $receiverId")
+                // 調用 ContactRepository 的方法
+                contactRepository.rejectFriendRequest(senderId, receiverId)
+                Log.i("ContactsViewModel", "Friend request from $senderId rejected.")
+                // 拒絕/忽略成功後，只需要刷新好友請求列表
+                loadFriendRequests()
+                _isLoading.value = false // 手動設置為 false，因為只刷新了一個列表
+            } catch (e: Exception) {
+                Log.e("ContactsViewModel", "Error rejecting friend request", e)
+                _error.value = "拒絕請求失敗: ${e.message}"
+                _isLoading.value = false // 確保出錯時停止加載狀態
             }
         }
     }
 
-    // --- 清除搜索狀態 (保持不變) ---
-    fun clearSearchState() { /* ... */
+    fun showSearchDialog() {
+        _isSearching.value = true
     }
 
-    // --- 清除操作結果消息 (用於 Snackbar) ---
-    fun clearActionResult() {
-        _uiState.value = _uiState.value.copy(actionResult = null)
+    fun dismissSearchDialog() {
+        _isSearching.value = false
+        // 可選：關閉對話框後刷新列表，以防用戶剛剛發送了請求
+        loadFriendRequests()
+        loadContacts()
     }
+
+    // --- 輔助函數：允許 Screen 獲取 Repository 實例傳遞給 Dialog ---
+    fun getContactRepository(): ContactRepository = contactRepository
+    fun getAuthRepository(): AuthRepository = authRepository
+    // --- 輔助函數結束 ---
+
 }

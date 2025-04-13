@@ -1,342 +1,253 @@
 package com.example.jjll.ui.screens.contacts
 
-import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavController
 import com.example.jjll.data.UserProfile
-import com.example.jjll.ui.theme.JJLLTheme
-import com.example.jjll.R
+import com.example.jjll.ui.dialogs.SearchUserDialog
+import com.example.jjll.ui.navigation.AppDestinations
 
+/*
+* 完善 ContactsScreen.kt 的 UI：
+確保 UI 中有兩個獨立的部分（例如，兩個 LazyColumn 或一個 LazyColumn 包含不同的 item 類型）
+來分別顯示來自 viewModel.friendRequests 和 viewModel.contacts 的數據。
+好友請求列表項需要顯示請求者信息和 "接受" / "拒絕" 按鈕，按鈕的 onClick 應調用 viewModel.acceptFriendRequest(request.userId)
+或 viewModel.rejectFriendRequest(request.userId)。
+已接受聯繫人列表項 需要顯示聯繫人信息（名片），並且其頂層可點擊修飾符 (Modifier.clickable) 需要調用 navController.navigate(...)
+來導航到 ChatDetailScreen，並傳遞正確的 contact.userId 和 contact.username。
+*
+代碼說明和要點：
+狀態收集: 使用 collectAsStateWithLifecycle() 收集 ViewModel 的 StateFlow，這是 Jetpack Compose 中推薦的方式，能感知生命週期。
+Scaffold 結構: 使用 Scaffold 提供標準的屏幕佈局，包含 TopAppBar。
+TopAppBar: 顯示標題 "通讯录"，並在 actions 中添加了一個 IconButton，圖標是 Icons.Filled.Search，點擊時調用 viewModel.showSearchDialog()。
+條件渲染: Box 內部使用 when 語句根據 isLoading 和 error 的狀態顯示不同的內容（加載指示器、錯誤信息或實際列表）。
+SearchUserDialog: 當 isSearching 為 true 時，顯示搜索對話框。
+注意，需要將 ContactRepository 和 AuthRepository 實例傳遞給它。為了做到這一點，
+我在 ContactsViewModel 中添加了兩個簡單的 getter 方法 (getContactRepository, getAuthRepository)，
+您需要在您的 ContactsViewModel.kt 中添加這兩個方法。
+LazyColumn: 用於高效顯示可能很長的請求列表和聯繫人列表。
+分區顯示: 在 LazyColumn 中，使用 item 顯示標題 ("好友请求", "我的联系人")，並使用 items 分別遍歷 friendRequests 和 contacts 列表。
+添加了條件判斷 (isNotEmpty())，只在列表非空時顯示標題和內容。也添加了空狀態的提示文本。
+FriendRequestItem: 單獨的 Composable 用於顯示單個好友請求，包含用戶名和 "接受"/"拒絕" 按鈕，按鈕的 onClick 回調連接到 ViewModel 的方法。
+ContactItem: 單獨的 Composable 用於顯示單個聯繫人。
+關鍵點: 整個 Row 使用 Modifier.clickable(onClick = onClick) 使其可點擊。
+導航邏輯: 點擊時觸發的 onClick lambda 調用 navController.navigate()，
+並使用 Screen.ChatDetail.route + "/${contact.userId}/${contact.username}" 構建正確的導航路徑，
+將被點擊聯繫人的 userId 和 username 傳遞給 ChatDetailScreen。
+key: 在 items 中使用 key = { it.userId } 可以幫助 Compose 更高效地處理列表項的重組、添加和刪除。
+Divider: 在列表項之間添加了分隔線，改善視覺效果。
+Padding 和 Spacing: 使用 Modifier.padding 和 Spacer 來調整佈局和間距。
+* */
 
-private const val TAG = "ContactsScreen" // 添加 Log Tag
-
-@OptIn(ExperimentalMaterial3Api::class) // For Scaffold, SnackbarHostState
+@OptIn(ExperimentalMaterial3Api::class) // Scaffold 和 TopAppBar 需要
 @Composable
 fun ContactsScreen(
-    viewModel: ContactsViewModel = hiltViewModel(),
-    onContactClick: (userId: String) -> Unit, // 點擊聯繫人回調
-    // 將 SnackbarHostState 從 MainScreen 傳入是更好的實踐
-    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() }
+    navController: NavController,
+    viewModel: ContactsViewModel = hiltViewModel()
 ) {
-    // 從 ViewModel 觀察 UI 狀態
-    val uiState by viewModel.uiState
+    val friendRequests by viewModel.friendRequests.collectAsStateWithLifecycle()
+    val contacts by viewModel.contacts.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
+    val isSearching by viewModel.isSearching.collectAsStateWithLifecycle()
 
-    // 使用 LaunchedEffect 監聽 actionResult 以顯示 Snackbar
-    // key 設置為 uiState.actionResult，當它從 null 變為有值時觸發
-    LaunchedEffect(uiState.actionResult) {
-        uiState.actionResult?.let { message ->
-            Log.d(TAG, "Showing snackbar for actionResult: $message")
-            try {
-                // 顯示 Snackbar
-                snackbarHostState.showSnackbar(message = message, duration = SnackbarDuration.Short)
-            } finally {
-                // 無論成功或失敗，顯示後都清除消息，防止重複顯示
-                viewModel.clearActionResult()
-            }
-        }
+    // 條件顯示搜索對話框
+    if (isSearching) {
+        SearchUserDialog(
+            onDismiss = viewModel::dismissSearchDialog,
+            contactRepository = viewModel.getContactRepository(), // 傳遞 Repository 實例
+            authRepository = viewModel.getAuthRepository(),
+            profileRepository = TODO()       // 傳遞 Repository 實例
+        )
     }
 
-    // 主體佈局：使用 Column 組合請求區和聯繫人區
-    Column(modifier = Modifier.fillMaxSize()) {
-
-        // --- 待處理請求區域 ---
-        // 加載或錯誤狀態只顯示文本提示或小型指示器，不阻塞聯繫人列表
-        if (uiState.isLoadingPending) {
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically){
-                CircularProgressIndicator(modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("正在加載好友請求...", style = MaterialTheme.typography.bodySmall)
-            }
-        } else if (uiState.pendingError != null) {
-            Text(
-                text = "加載好友請求失敗", // 簡化錯誤提示
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-            // 可以添加小型重試按鈕
-            // TextButton(onClick = { viewModel.loadPendingRequests() }){ Text("重試請求")}
-        } else if (uiState.pendingRequests.isNotEmpty()) {
-            // 如果有待處理請求，則顯示它們
-            Column {
-                Text(
-                    "好友請求",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp) // 調整邊距
-                )
-                uiState.pendingRequests.forEach { request ->
-                    PendingRequestItem( // 顯示每個請求
-                        pendingRequest = request,
-                        onAcceptClick = {
-                            Log.d(TAG, "Accept button clicked for request id: ${request.contactId}")
-                            viewModel.acceptContactRequest(request.contactId)
-                        },
-                        onRejectClick = {
-                            Log.d(TAG, "Reject button clicked for request id: ${request.contactId}")
-                            viewModel.rejectContactRequest(request.contactId)
-                        }
-                    )
-                    // Divider(modifier = Modifier.padding(start = 16.dp)) // Pending Item 內部可以不加 Divider
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("通讯录") },
+                actions = {
+                    // 添加搜索按鈕
+                    IconButton(onClick = viewModel::showSearchDialog) {
+                        Icon(
+                            imageVector = Icons.Filled.Search,
+                            contentDescription = "Search Users"
+                        )
+                    }
                 }
-                Divider(thickness = 8.dp, modifier = Modifier.padding(top = 8.dp)) // 用厚 Divider 分隔區域
-            }
+                // 可以根據需要添加 navigationIcon 等
+            )
         }
-        // 如果沒有待處理請求，則不顯示任何內容，直接進入聯繫人列表區域
-
-        // --- 已接受聯繫人區域 ---
-        // 添加 Log 檢查進入此區域時的狀態
-        Log.d(TAG, "Rendering Accepted Contacts Area: isLoading=${uiState.isLoadingContacts}, error=${uiState.contactsError}, count=${uiState.contacts.size}")
-
-        Box(modifier = Modifier.weight(1f)) { // 佔用剩餘空間
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues) // 应用 Scaffold 提供的 padding
+        ) {
             when {
-                // 只在首次加載聯繫人且列表為空時顯示全局加載
-                uiState.isLoadingContacts && uiState.contacts.isEmpty() && uiState.contactsError == null -> {
-                    Log.d(TAG, "Displaying loading indicator for contacts.")
+                isLoading -> {
+                    // 显示加载指示器
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
-                // 加載出錯
-                uiState.contactsError != null -> {
-                    Log.d(TAG, "Displaying contacts error message.")
-                    Column(modifier = Modifier.align(Alignment.Center).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("加載聯繫人失敗: ${uiState.contactsError}", color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(onClick = { viewModel.loadAcceptedContacts() }) { Text("重試") }
-                    }
+                error != null -> {
+                    // 显示错误信息
+                    Text(
+                        text = "Error: $error",
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(16.dp)
+                    )
                 }
-                // 成功加載但列表為空
-                uiState.contacts.isEmpty() && !uiState.isLoadingContacts -> {
-                    Log.d(TAG, "Displaying empty contacts message.")
-                    Text("你的通訊錄是空的。\n點擊頂部搜索按鈕添加聯繫人吧！", textAlign = TextAlign.Center, modifier = Modifier.align(Alignment.Center).padding(16.dp))
-                }
-                // 成功加載且列表不為空
                 else -> {
-                    Log.d(TAG, "Displaying contacts list with ${uiState.contacts.size} items.")
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = 16.dp)
-                    ) {
-                        items(uiState.contacts, key = { it.user_id }) { contact ->
-                            ContactItem(
-                                userProfile = contact,
-                                onClick = {
-                                    Log.d(TAG, "Contact item clicked: ${contact.user_id}")
-                                    onContactClick(contact.user_id)
-                                }
-                            )
-                        }
+                    // 显示主要内容（请求和联系人列表）
+                    ContactsContent(
+                        navController = navController,
+                        friendRequests = friendRequests,
+                        contacts = contacts,
+                        onAcceptRequest = { userId -> viewModel.acceptFriendRequest(userId) },
+                        onRejectRequest = { userId -> viewModel.rejectFriendRequest(userId) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ContactsContent(
+    navController: NavController,
+    friendRequests: List<UserProfile>,
+    contacts: List<UserProfile>,
+    onAcceptRequest: (String) -> Unit,
+    onRejectRequest: (String) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp) // 給列表內容添加內邊距
+    ) {
+        // 好友請求部分
+        if (friendRequests.isNotEmpty()) {
+            item {
+                Text(
+                    "好友请求",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+            items(friendRequests, key = { it.userId }) { request -> // 使用 userId 作為 key
+                FriendRequestItem(
+                    request = request,
+                    onAccept = { onAcceptRequest(request.userId) },
+                    onReject = { onRejectRequest(request.userId) }
+                )
+                Divider(modifier = Modifier.padding(vertical = 8.dp)) // 添加分隔線
+            }
+        } else {
+            item {
+                // 可以選擇性顯示 "無待處理請求"
+                // Text("暂无好友请求", modifier = Modifier.padding(vertical = 8.dp))
+            }
+        }
+
+
+        // 我的聯繫人部分
+        if (contacts.isNotEmpty()) {
+            item {
+                Text(
+                    "我的联系人",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 8.dp) // 與上一部分的間距
+                )
+            }
+            items(contacts, key = { it.userId }) { contact -> // 使用 userId 作為 key
+                ContactItem(
+                    contact = contact,
+                    onClick = {
+                        // --- 關鍵：點擊聯繫人導航到聊天詳情頁 ---
+                        navController.navigate(AppDestinations.ChatDetail.route + "/${contact.userId}/${contact.username}")
                     }
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) // 添加分隔線
+            }
+        } else {
+            item {
+                // 可以選擇性顯示 "通訊錄為空"
+                if (friendRequests.isEmpty()) { // 只有在也沒有請求時才顯示這個
+                    Text("通讯录为空，快去搜索添加好友吧！", modifier = Modifier.padding(vertical = 16.dp))
                 }
             }
-            // 如果正在下拉刷新，可以疊加顯示刷新指示器
-            // PullRefreshIndicator(...)
-        } // Box 結束 (已接受聯繫人區域)
-    } // Column 結束 (整體佈局)
-
-    // 如果 SnackbarHostState 由外部傳入，這裡就不需要 SnackbarHost
-    // Box(Modifier.fillMaxSize()) {
-    //     SnackbarHost(hostState = snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter))
-    // }
-}
-
-
-// --- 待處理請求列表項 ---
-//於顯示單個待處理的好友請求，包含發送者信息以及接受和拒絕按鈕。
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun PendingRequestItem(
-    pendingRequest: PendingRequest, // 接收 PendingRequest 數據
-    onAcceptClick: () -> Unit,      // 接受按鈕點擊回調
-    onRejectClick: () -> Unit       // 拒絕按鈕點擊回調
-) {
-    ListItem(
-        // headlineContent: 顯示發送者名稱
-        headlineContent = {
-            Text(
-                text = pendingRequest.senderProfile.display_name ?: pendingRequest.senderProfile.username,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        },
-        // supportingContent: 顯示發送者 @username
-        supportingContent = {
-            Text(
-                text = "@${pendingRequest.senderProfile.username}",
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        },
-        // leadingContent: 顯示發送者頭像
-        leadingContent = {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(pendingRequest.senderProfile.avatar_url)
-                    .crossfade(true)
-                    .placeholder(R.drawable.ic_avatar_placeholder)
-                    .error(R.drawable.ic_avatar_placeholder)
-                    .fallback(R.drawable.ic_avatar_placeholder)
-                    .build(),
-                contentDescription = "${pendingRequest.senderProfile.username} 的頭像",
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape),
-                contentScale = ContentScale.Crop
-            )
-        },
-        // trailingContent: 放置接受和拒絕按鈕
-        trailingContent = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // 接受按鈕 (綠色 Check)
-                IconButton(
-                    onClick = onAcceptClick,
-                    modifier = Modifier.size(32.dp) // 可以稍微調整按鈕大小
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Check,
-                        contentDescription = "接受好友請求",
-                        tint = Color(0xFF4CAF50) // 使用綠色調
-                    )
-                }
-                // 間隔
-                Spacer(modifier = Modifier.width(8.dp))
-                // 拒絕/忽略按鈕 (紅色 Close)
-                IconButton(
-                    onClick = onRejectClick,
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Close,
-                        contentDescription = "忽略好友請求",
-                        tint = MaterialTheme.colorScheme.error // 使用主題的錯誤顏色 (通常是紅色)
-                    )
-                }
-            }
-        },
-        modifier = Modifier.padding(vertical = 4.dp) // 給列表項本身一點垂直邊距
-    )
-}
-
-
-
-// --- 已接受聯繫人列表項 ---
-@OptIn(ExperimentalMaterial3Api::class) // ListItem 需要此注解
-@Composable
-private fun ContactItem(
-    userProfile: UserProfile, // 接收 UserProfile 數據
-    onClick: () -> Unit       // 接收點擊事件的回調
-) {
-    // 使用 Column 包裹 ListItem 和 Divider (可選)
-    Column {
-        ListItem(
-            modifier = Modifier
-                .fillMaxWidth() // 佔滿寬度
-                .clickable(onClick = onClick), // 使整行可點擊，觸發外部傳入的 onClick
-            // 主要文本內容：優先顯示 displayName，否則顯示 username
-            headlineContent = {
-                Text(
-                    text = userProfile.display_name ?: userProfile.username,
-                    style = MaterialTheme.typography.bodyLarge, // 設置文本樣式
-                    maxLines = 1, // 最多顯示一行
-                    overflow = TextOverflow.Ellipsis // 超長時用省略號
-                )
-            },
-            // 次要文本內容：顯示 @username
-            supportingContent = {
-                Text(
-                    text = "@${userProfile.username}",
-                    style = MaterialTheme.typography.bodyMedium, // 稍小的樣式
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            // 列表項開頭的內容：顯示頭像
-            leadingContent = {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(userProfile.avatar_url) // 加載頭像 URL
-                        .crossfade(true) // 淡入效果
-                        .placeholder(R.drawable.ic_avatar_placeholder) // 佔位圖
-                        .error(R.drawable.ic_avatar_placeholder)       // 加載錯誤圖
-                        .fallback(R.drawable.ic_avatar_placeholder)    // URL 為 null 時的圖
-                        .build(),
-                    contentDescription = "${userProfile.username} 的頭像", // 無障礙描述
-                    modifier = Modifier
-                        .size(40.dp) // 設置頭像大小
-                        .clip(CircleShape), // 裁剪成圓形
-                    contentScale = ContentScale.Crop // 圖像裁剪方式
-                )
-            }
-            // trailingContent = { } // 可選：在這裡添加尾部圖標或按鈕
-        )
-        // 可選：在每個 ListItem 下方添加分隔線
-        // Divider(modifier = Modifier.padding(start = 72.dp)) // 左側縮進以對齊文本（40dp 頭像 + 16dp 間距 + 16dp 文本區間距）
-    }
-}
-
-
-
-// --- ContactItem 的預覽 ---
-@Preview(showBackground = true, widthDp = 360)
-@Composable
-fun ContactItemPreview() {
-    JJLLTheme {
-        val previewProfile = UserProfile(
-            user_id = "preview_id",
-            username = "preview_contact_username_very_long_to_test_ellipsis",
-            display_name = "聯繫人名稱預覽",
-            avatar_url = null // 或者提供一個測試 URL: "https://picsum.photos/id/237/50/50"
-        )
-        Surface { // 添加 Surface 以應用背景色
-            ContactItem(userProfile = previewProfile, onClick = {})
         }
     }
 }
 
-
-
-// --- PendingRequestItem 的預覽 ---
-@Preview(showBackground = true, widthDp = 360)
+// 好友請求列表項
 @Composable
-fun PendingRequestItemPreview() {
-    JJLLTheme {
-        val previewSender = UserProfile(
-            user_id = "sender_preview_id",
-            username = "sender_username_long",
-            display_name = "請求發送者名稱預覽",
-            avatar_url = null
-        )
-        val previewRequest = PendingRequest(contactId = 1L, senderProfile = previewSender)
-        Surface { // 添加 Surface 以應用背景色
-            PendingRequestItem(
-                pendingRequest = previewRequest,
-                onAcceptClick = {},
-                onRejectClick = {}
-            )
+fun FriendRequestItem(
+    request: UserProfile,
+    onAccept: () -> Unit,
+    onReject: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween // 讓按鈕靠右
+    ) {
+        // 顯示請求者信息 (例如：用戶名)
+        Text(request.username, modifier = Modifier.weight(1f).padding(end = 8.dp)) // 佔用多餘空間
+
+        // 接受和拒絕按鈕
+        Row {
+            Button(onClick = onAccept, modifier = Modifier.padding(end = 8.dp)) {
+                Text("接受")
+            }
+            OutlinedButton(onClick = onReject) { // 使用 OutlinedButton 區分
+                Text("拒绝")
+            }
         }
     }
 }
+
+// 聯繫人列表項 (名片)
+@Composable
+fun ContactItem(
+    contact: UserProfile,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick) // --- 關鍵：使整行可點擊 ---
+            .padding(vertical = 12.dp), // 增加垂直內邊距使點擊區域更大
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // 可以添加頭像 Icon(Icons.Default.Person, contentDescription = "Contact Avatar")
+        Spacer(modifier = Modifier.width(16.dp)) // 頭像和名字的間距
+        Text(contact.username, fontSize = 16.sp)
+        // 可以添加其他信息，如在線狀態等
+    }
+}
+
+// --- Helper function in ViewModel to pass repository ---
+// 在 ContactsViewModel.kt 中添加這兩個方法，以便在 Screen 中獲取 Repository 實例傳遞給 Dialog
+/*
+fun getContactRepository(): ContactRepository = contactRepository
+fun getAuthRepository(): AuthRepository = authRepository
+*/

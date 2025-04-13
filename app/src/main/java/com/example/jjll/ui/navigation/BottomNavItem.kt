@@ -1,37 +1,46 @@
-package com.example.jjll.ui.screens // 或其他你選擇的路徑
+package com.example.jjll.ui.navigation // 或其他你選擇的路徑
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Contacts
-import androidx.compose.material.icons.outlined.AccountCircle
-import androidx.compose.material.icons.outlined.Chat
-import androidx.compose.material.icons.outlined.Contacts
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.ui.graphics.vector.ImageVector
 
-// 使用 Sealed Class 定義底部導航項
+
+/**
+ * 定義應用程序底部導航欄的項目。
+ * 每個項目關聯一個 AppDestinations 路由、一個標籤和一個圖標。
+ */
 sealed class BottomNavItem(
-    val route: String, // 每個項目的唯一標識/路由名
-    val title: String, // 顯示的標題
-    val selectedIcon: ImageVector, // 選中狀態的圖標
-    val unselectedIcon: ImageVector // 未選中狀態的圖標
+    val destination: AppDestinations, // 關聯的導航目標
+    val label: String,                // 顯示的標籤文本
+    val icon: ImageVector             // 顯示的圖標
 ) {
-    object Chat : BottomNavItem(
-        route = "chat_list", // 與後續 ChatListScreen 的路由關聯 (也可以用簡單標識符)
-        title = "聊天",
-        selectedIcon = Icons.Filled.Chat,
-        unselectedIcon = Icons.Outlined.Chat
-    )
+    // 通訊錄頁面
     object Contacts : BottomNavItem(
-        route = "contacts",
-        title = "通訊錄",
-        selectedIcon = Icons.Filled.Contacts,
-        unselectedIcon = Icons.Outlined.Contacts
+        destination = AppDestinations.Contacts,
+        label = "通訊錄",
+        icon = Icons.Default.Contacts // 或 Icons.Outlined.Contacts
     )
+
+    // 聊天列表頁面
+    object ChatList : BottomNavItem(
+        destination = AppDestinations.ChatList,
+        label = "聊天",
+        icon = Icons.Default.Chat // 或 Icons.Outlined.Chat
+    )
+
+    // 個人資料頁面
     object MyProfile : BottomNavItem(
-        route = "my_profile",
-        title = "我的",
-        selectedIcon = Icons.Filled.AccountCircle,
-        unselectedIcon = Icons.Outlined.AccountCircle
+        destination = AppDestinations.MyProfile,
+        label = "我的",
+        icon = Icons.Default.Person // 或 Icons.Outlined.Person
     )
 }
+
+// 可以在此文件底部或 MainScreen 中定義底部導航項目列表
+val bottomNavItemsList = listOf(
+    BottomNavItem.Contacts,
+    BottomNavItem.ChatList,
+    BottomNavItem.MyProfile
+)

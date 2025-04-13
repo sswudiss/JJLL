@@ -1,127 +1,112 @@
 package com.example.jjll.ui.screens.profile
 
-import androidx.compose.runtime.State
-import androidx.compose.runtime.mutableStateOf
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.jjll.ui.auth.AuthRepository
+import com.example.jjll.data.JJLLAuthException
 import com.example.jjll.data.ProfileRepository
+import com.example.jjll.data.UserProfile
+import com.example.jjll.ui.auth.AuthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
-import android.util.Log
-import com.example.jjll.common.RepoResult
-import com.example.jjll.data.UserProfile
-import com.example.jjll.ui.auth.NavigationEvent
+
 
 //這個 ViewModel 將負責管理 "我的" 頁面的狀態和業務邏輯。
 
-
-private const val TAG = "ProfileViewModel"
-
-// 定義 Profile 頁面的 UI 狀態
-data class ProfileUiState(
-    val isLoading: Boolean = false,
-    val userProfile: UserProfile? = null,
-    val error: String? = null,
-    val showLogoutConfirmDialog: Boolean = false
-)
-
 @HiltViewModel
 class ProfileViewModel @Inject constructor(
-    private val authRepository: AuthRepository,
-    private val profileRepository: ProfileRepository
+    private val profileRepository: ProfileRepository,
+    private val authRepository: AuthRepository
 ) : ViewModel() {
 
-    private val _uiState = mutableStateOf(ProfileUiState(isLoading = true)) // 初始狀態為加載中
-    val uiState: State<ProfileUiState> = _uiState // UI 層觀察這個 State
+    // --- 狀態 Flow ---
+    private val _userProfile = MutableStateFlow<UserProfile?>(null)
+    val userProfile: StateFlow<UserProfile?> = _userProfile.asStateFlow()
 
-    private val _navigationEvent = MutableSharedFlow<NavigationEvent>()
-    val navigationEvent = _navigationEvent.asSharedFlow()
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
+    // --- 登出相關狀態 (可選) ---
+    // 可以添加一個狀態來通知 UI 登出操作是否完成或失敗
+    private val _logoutState = MutableStateFlow<LogoutState>(LogoutState.Idle)
+    val logoutState: StateFlow<LogoutState> = _logoutState.asStateFlow()
 
     init {
-        fetchCurrentUserProfile() // ViewModel 初始化時自動加載用戶資料
+        // ViewModel 初始化時自動加載用戶資料
+        loadUserProfile()
     }
 
-    fun fetchCurrentUserProfile() {
-        _uiState.value = _uiState.value.copy(isLoading = true, error = null) // 開始加載，清除舊錯誤
+    /**
+     * 從 Repository 加載當前用戶的 Profile。
+     */
+    fun loadUserProfile() {
         viewModelScope.launch {
-            val currentUserId = authRepository.getCurrentUserId()
-            if (currentUserId == null) {
-                Log.e(TAG, "Cannot fetch profile, current user ID is null.")
-                _uiState.value = _uiState.value.copy(isLoading = false, error = "無法獲取用戶信息，請重新登錄")
-                // 可能需要觸發登出導航
-                // _navigationEvent.emit(NavigationEvent.NavigateToLogin)
-                return@launch
-            }
-
-            Log.d(TAG, "Fetching profile for current user ID: $currentUserId")
-            when (val result = profileRepository.getUserProfile(currentUserId)) {
-                is RepoResult.Success -> {
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        userProfile = result.data,
-                        error = null
-                    )
-                    Log.i(TAG, "Profile fetched successfully: ${result.data.username}")
+            _isLoading.value = true
+            _error.value = null // 清除之前的錯誤
+            try {
+                Log.d("ProfileViewModel", "正在加載當前用戶資料...")
+                // 調用 ProfileRepository 的方法獲取當前用戶信息
+                _userProfile.value = profileRepository.getCurrentUserProfile()
+                if (_userProfile.value == null) {
+                    // 如果返回 null 但沒有拋出 AuthException，可能是其他錯誤或 Profile 不存在
+                    Log.w("ProfileViewModel", "無法獲取用戶資料，可能未找到對應 Profile。")
+                    _error.value = "無法加載用戶資料。" // 可以提供更具體的錯誤
+                } else {
+                    Log.d("ProfileViewModel", "用戶資料加載成功: ${_userProfile.value?.username}")
                 }
-                is RepoResult.Error -> {
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        userProfile = null, // 可以選擇不清空舊數據，看 UI 設計
-                        error = result.message
-                    )
-                    Log.e(TAG, "Error fetching profile: ${result.message}", result.exception)
-                }
-                is RepoResult.Loading -> {
-                    // RepoResult 也定義了 Loading，如果 Repository 內部有複雜加載狀態可以用到
-                    _uiState.value = _uiState.value.copy(isLoading = true)
-                }
+            } catch (e: JJLLAuthException) {
+                Log.e("ProfileViewModel", "加載用戶資料時認證錯誤", e)
+                _error.value = "認證失敗，請重新登錄。"
+                _userProfile.value = null // 清空舊數據
+            } catch (e: Exception) {
+                Log.e("ProfileViewModel", "加載用戶資料時發生未知錯誤", e)
+                _error.value = "加載用戶資料失敗: ${e.message}"
+                _userProfile.value = null // 清空舊數據
+            } finally {
+                _isLoading.value = false // 結束加載狀態
             }
         }
     }
 
-    fun requestLogout() {
-        // 顯示登出確認對話框
-        _uiState.value = _uiState.value.copy(showLogoutConfirmDialog = true)
-    }
-
-    fun confirmLogout() {
-        _uiState.value = _uiState.value.copy(showLogoutConfirmDialog = false) // 關閉對話框
+    /**
+     * 處理用戶登出操作。
+     * 調用 AuthRepository 的登出方法。
+     * **注意：** 實際的導航操作（跳轉到登錄頁）應該由 UI 層的回調觸發。
+     */
+    fun logout() {
         viewModelScope.launch {
-            Log.d(TAG, "User confirmed logout.")
-            authRepository.signOut() // 調用 Repository 執行登出
-            _navigationEvent.emit(NavigationEvent.NavigateToLogin) // 發送導航事件
-        }
-    }
-
-    fun cancelLogout() {
-        // 僅關閉對話框
-        _uiState.value = _uiState.value.copy(showLogoutConfirmDialog = false)
-    }
-
-    // --- 後續功能的方法 ---
-    fun updateDisplayName(newName: String) {
-        val userId = _uiState.value.userProfile?.user_id ?: return // 需要用戶 ID
-        if (newName.isBlank() || newName == _uiState.value.userProfile?.display_name) return // 簡單驗證
-
-        viewModelScope.launch {
-            // 可以添加 Loading 狀態
-            when(profileRepository.updateDisplayName(userId, newName)) {
-                is RepoResult.Success -> {
-                    // 更新成功，刷新 Profile
-                    fetchCurrentUserProfile() // 重新獲取最新數據
-                    Log.i(TAG,"Display name update successful.")
-                }
-                is RepoResult.Error -> {
-                    // 處理錯誤，例如顯示 SnackBar
-                    Log.e(TAG,"Display name update failed: ${ (profileRepository.updateDisplayName(userId, newName) as RepoResult.Error).message}")
-                    _uiState.value = _uiState.value.copy(error = "更新名稱失敗") // 簡單錯誤提示
-                }
-                else -> {}
+            _logoutState.value = LogoutState.Loading // 開始登出
+            try {
+                Log.d("ProfileViewModel", "正在執行登出操作...")
+                authRepository.logout() // 調用 Repository 的登出方法
+                Log.i("ProfileViewModel", "登出成功。")
+                _logoutState.value = LogoutState.Success
+                // 登出成功後，清空本地用戶信息是個好習慣
+                _userProfile.value = null
+                // 導航應由 UI 層的 onLogout 回調處理，ViewModel 不直接控制導航
+            } catch (e: Exception) {
+                Log.e("ProfileViewModel", "登出時發生錯誤", e)
+                _logoutState.value = LogoutState.Error("登出失敗: ${e.message}")
+            } finally {
+                // 可以選擇在短暫延遲後重置 LogoutState 回 Idle
+                // kotlinx.coroutines.delay(2000)
+                // _logoutState.value = LogoutState.Idle
             }
         }
     }
+}
+
+// --- (可選) 定義登出操作的狀態 ---
+sealed class LogoutState {
+    object Idle : LogoutState() // 初始狀態
+    object Loading : LogoutState() // 正在登出
+    object Success : LogoutState() // 登出成功
+    data class Error(val message: String?) : LogoutState() // 登出失敗
 }

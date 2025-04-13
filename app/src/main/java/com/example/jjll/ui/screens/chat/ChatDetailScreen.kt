@@ -1,348 +1,286 @@
 package com.example.jjll.ui.screens.chat
 
+
+import android.util.Log
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import com.example.jjll.R
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavController
 import com.example.jjll.data.Message
-import com.example.jjll.data.UserProfile
-import com.example.jjll.ui.theme.JJLLTheme
+import kotlinx.coroutines.launch
 
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class) // 需要用於 Scaffold, TopAppBar, TextField 等
 @Composable
 fun ChatDetailScreen(
-    navController: androidx.navigation.NavHostController, // 需要用於返回
-    viewModel: ChatDetailViewModel = hiltViewModel()
-    // conversationId 不再需要直接傳入，ViewModel 從 SavedStateHandle 獲取
+    navController: NavController,
+    viewModel: ChatDetailViewModel = hiltViewModel() // 使用 Hilt 注入 ViewModel
 ) {
-    val uiState by viewModel.uiState
-    val currentUserId = viewModel.currentUserId // 從 ViewModel 獲取當前用戶 ID
+    // --- 從 ViewModel 收集狀態 ---
+    val contactProfile by viewModel.contactProfile.collectAsStateWithLifecycle()
+    val messages by viewModel.messages.collectAsStateWithLifecycle() // 假設 ViewModel 提供 StateFlow<List<Message>>
+    val messageInput by viewModel.messageInput.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
 
-    // 用於控制 LazyColumn 滾動
-    val listState = rememberLazyListState()
-    // 用於自動滾動到底部
-    val coroutineScope = rememberCoroutineScope()
+    // --- 獲取當前用戶 ID (用於區分消息) ---
+    // 這個 ID 必須可靠獲取，通常由 ViewModel 提供
+    val currentUserId = viewModel.getCurrentUserId() // 假設 ViewModel 有此方法
 
-    // 當消息列表變化時，滾動到底部
-    LaunchedEffect(uiState.messages.size) {
-        if (uiState.messages.isNotEmpty()) {
-            // 使用 animateScrollToItem 可能更平滑，但需要計算好 index
-            // listState.animateScrollToItem(uiState.messages.size - 1)
-            listState.scrollToItem(uiState.messages.size - 1) // 立即滾動
+    // --- UI 狀態和控制器 ---
+    val listState = rememberLazyListState() // 用於控制列表滾動
+    val coroutineScope = rememberCoroutineScope() // 用於啟動協程（例如滾動）
+    val keyboardController = LocalSoftwareKeyboardController.current // 用於控制軟鍵盤
+
+    // --- 效果處理 (Effects) ---
+    // 當消息列表大小變化時，自動滾動到底部
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            coroutineScope.launch {
+                listState.animateScrollToItem(messages.size - 1) // 滾動到最後一項
+            }
         }
     }
 
+    // --- UI 結構 ---
     Scaffold(
         topBar = {
-            ChatDetailTopBar(
-                contactProfile = uiState.contactProfile,
-                isLoading = uiState.isLoadingContact,
-                onBackClick = { navController.popBackStack() }, // 返回上一頁
-                onVideoCallClick = { /* TODO */ },
-                onMenuClick = { /* TODO */ }
+            TopAppBar(
+                title = {
+                    Text(
+                        // 顯示聊天對象的用戶名，處理 null 情況
+                        text = contactProfile?.username ?: "加載中...",
+                        maxLines = 1, // 最多一行
+                        overflow = TextOverflow.Ellipsis // 超出部分顯示省略號
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = { navController.navigateUp() }) { // 返回按鈕
+                        Icon(Icons.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                }
+                // 可以在此處添加更多頂部欄操作，如視頻通話、查看資料等
             )
-        },
-        contentWindowInsets = WindowInsets(0, 0, 0, 0) // 移除 Scaffold 默認 insets，讓 imePadding 生效
-    ) { paddingValues -> // 獲取 Scaffold 計算的 Padding (主要來自 TopBar)
+        }
+    ) { paddingValues ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                // 只應用頂部 padding，底部由 imePadding 和 navigationBarsPadding 處理
-                .padding(top = paddingValues.calculateTopPadding())
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.1f)) // 聊天背景色
+                .padding(paddingValues) // 應用 Scaffold 的內邊距
+            // 可以考慮添加 .imePadding() 來更好地處理鍵盤遮擋，
+            // 但通常 Column + weight + adjustResize 已能較好工作
         ) {
-            // 消息列表區域
-            MessageList(
-                messages = uiState.messages,
-                currentUserId = currentUserId,
+            // --- 消息列表、加載和錯誤顯示區域 ---
+            Box(
                 modifier = Modifier
-                    .weight(1f) // 佔滿除輸入框外的所有空間
-                    .imePadding() // 在鍵盤彈出時，自動添加 padding 推高列表
-            )
-
-            // 輸入區域
-            MessageInputArea(
-                messageInput = uiState.messageInput,
-                onInputChange = viewModel::onMessageInputChange,
-                onSendMessage = viewModel::sendMessage,
-                modifier = Modifier
-                    .navigationBarsPadding() // 在系統導航欄之上添加 padding
-                    .imePadding() // 在鍵盤彈出時，也推高輸入框 (可選，看效果)
+                    .weight(1f) // 佔據頂部和輸入框之間的剩餘空間
                     .fillMaxWidth()
-            )
-        }
-    }
-}
+            ) {
+                // 初始加載狀態 (列表為空時顯示)
+                if (isLoading && messages.isEmpty()) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                }
+                // 錯誤信息顯示 (可以考慮使用 Snackbar)
+                error?.let { errorMsg ->
+                    Text(
+                        text = "錯誤: $errorMsg",
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                            .align(Alignment.TopCenter) // 在頂部顯示錯誤以便看到
+                    )
+                }
 
-// --- 自定義頂部欄 ---
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ChatDetailTopBar(
-    contactProfile: UserProfile?,
-    isLoading: Boolean,
-    onBackClick: () -> Unit,
-    onVideoCallClick: () -> Unit,
-    onMenuClick: () -> Unit
-) {
-    TopAppBar(
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // 對方頭像 (可選)
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(contactProfile?.avatar_url)
-                        .crossfade(true)
-                        .placeholder(R.drawable.ic_avatar_placeholder)
-                        .error(R.drawable.ic_avatar_placeholder)
-                        .fallback(R.drawable.ic_avatar_placeholder)
-                        .build(),
-                    contentDescription = "對方頭像",
+                // --- 消息列表 ---
+                LazyColumn(
+                    state = listState, // 關聯 LazyListState
                     modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape),
-                    contentScale = ContentScale.Crop
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                // 對方名稱
-                Text(
-                    text = if (isLoading) "加載中..." else contactProfile?.display_name
-                        ?: contactProfile?.username ?: "未知用戶",
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        },
-        navigationIcon = {
-            IconButton(onClick = onBackClick) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-            }
-        },
-        actions = {
-            IconButton(onClick = onVideoCallClick) {
-                Icon(Icons.Filled.Videocam, contentDescription = "視頻通話") // 佔位
-            }
-            IconButton(onClick = onMenuClick) {
-                Icon(Icons.Filled.MoreVert, contentDescription = "更多選項") // 佔位
-            }
-        }
-        // colors = TopAppBarDefaults.topAppBarColors(...) // 自定義顏色
-    )
+                        .fillMaxSize() // 填滿 Box
+                        .padding(horizontal = 8.dp), // 左右內邊距
+                    contentPadding = PaddingValues(vertical = 8.dp) // 上下內邊距
+                    // reverseLayout = true // 如果想讓新消息出現在底部且列表從下往上滾動
+                ) {
+                    items(messages, key = { it.id }) { message -> // 使用 message.id 作為 key
+                        // 必須知道當前用戶 ID 才能正確顯示消息對齊
+                        if (currentUserId != null) {
+                            MessageItem(
+                                message = message,
+                                isSentByCurrentUser = message.senderId == currentUserId // 判斷是否為當前用戶發送
+                            )
+                        } else {
+                            // 處理無法獲取當前用戶 ID 的情況 (例如顯示加載中或錯誤)
+                            Log.w("ChatDetailScreen", "無法確定消息 ${message.id} 的發送者，因為 currentUserId 為空")
+                            // 可以選擇顯示一個通用樣式的消息，或是不顯示
+                        }
+                    }
+                }
+            } // Box 結束
+
+            // --- 底部輸入區域 ---
+            ChatInput(
+                value = messageInput,
+                onValueChange = viewModel::onMessageInputChange, // 將輸入變化委託給 ViewModel
+                onSendClick = {
+                    // 在點擊發送時，確保輸入不為空 (雙重檢查)
+                    if (messageInput.isNotBlank()) {
+                        viewModel.sendMessage() // 調用 ViewModel 的發送方法
+                        // 可選：發送後清空鍵盤
+                        // keyboardController?.hide()
+                    }
+                },
+                // 可以根據 isLoading 狀態禁用輸入框和按鈕
+                // enabled = !isLoading
+                enabled = true // 暫時保持啟用
+            )
+        } // Column 結束
+    } // Scaffold 結束
 }
 
-
-// --- 消息列表 ---
+/**
+ * 用於顯示單條聊天消息氣泡的 Composable。
+ */
 @Composable
-private fun MessageList(
-    messages: List<Message>,
-    currentUserId: String?,
-    modifier: Modifier = Modifier,
-    listState: androidx.compose.foundation.lazy.LazyListState = rememberLazyListState() // 傳入或記住 ListState
-) {
-    val focusManager = LocalFocusManager.current // 用於隱藏鍵盤
-
-    LazyColumn(
-        state = listState, // 使用狀態控制滾動
-        modifier = modifier
-            .fillMaxSize()
-            // 點擊列表區域收起鍵盤
-            .pointerInput(Unit) {
-                detectTapGestures(onTap = { focusManager.clearFocus() })
-            },
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp) // 消息間的垂直間距
-    ) {
-        itemsIndexed(
-            messages,
-            key = { index, message -> message.id }) { index, message -> // 使用帶索引的 items 和 key
-            val isSentByMe = message.sender_id == currentUserId
-            MessageBubble(message = message, isSentByMe = isSentByMe)
-        }
+fun MessageItem(message: Message, isSentByCurrentUser: Boolean) {
+    // 根據發送者確定對齊方式、背景色和氣泡形狀
+    val alignment = if (isSentByCurrentUser) Alignment.CenterEnd else Alignment.CenterStart
+    val backgroundColor = if (isSentByCurrentUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant // 接收方使用不同的背景色
+    val textColor = if (isSentByCurrentUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+    val bubbleShape = if (isSentByCurrentUser) { // 不同方向的尖角效果
+        RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
+    } else {
+        RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
     }
-}
 
-// --- 單個消息氣泡 ---
-@Composable
-private fun MessageBubble(message: Message, isSentByMe: Boolean) {
-    // 使用 Box 控制對齊
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(
-                start = if (isSentByMe) 64.dp else 0.dp, // 自己發的靠右，左側留空
-                end = if (isSentByMe) 0.dp else 64.dp    // 對方發的靠左，右側留空
-            ),
-        contentAlignment = if (isSentByMe) Alignment.CenterEnd else Alignment.CenterStart
+            .padding(vertical = 4.dp), // 消息之間的垂直間距
+        contentAlignment = alignment // 控制氣泡在行內的對齊（左或右）
     ) {
-        Surface(
-            shape = RoundedCornerShape(
-                topStart = 16.dp,
-                topEnd = 16.dp,
-                bottomStart = if (isSentByMe) 16.dp else 0.dp, // 根據發送者調整圓角
-                bottomEnd = if (isSentByMe) 0.dp else 16.dp
-            ),
-            color = if (isSentByMe) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant, // 根據發送者設置不同背景色
-            tonalElevation = 1.dp, // 添加一點點陰影
-            modifier = Modifier.padding(vertical = 4.dp) // 氣泡自身的垂直內邊距
+        Box(
+            modifier = Modifier
+                // 限制氣泡最大寬度，避免過長消息佔滿整行
+                .fillMaxWidth(0.8f) // 例如，最大佔用 80% 寬度
+                // 確保內容在限制寬度內正確對齊
+                .wrapContentWidth(if (isSentByCurrentUser) Alignment.End else Alignment.Start)
+                .clip(bubbleShape) // 應用氣泡形狀
+                .background(backgroundColor) // 設置背景色
+                .padding(horizontal = 12.dp, vertical = 8.dp) // 氣泡內邊距
         ) {
-            Text(
-                text = message.content,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp) // 氣泡內文字邊距
-            )
-            // TODO: 添加時間戳、已讀狀態等
+            Column { // 使用 Column 以便未來在文本下方添加時間戳等信息
+                Text(
+                    text = message.content, // 顯示消息內容
+                    color = textColor,      // 設置文本顏色
+                    fontSize = 16.sp        // 設置字體大小
+                )
+                // 可選：在此處添加時間戳
+                /*
+                Text(
+                    text = formatTimestamp(message.createdAt), // 需要格式化函數
+                    style = MaterialTheme.typography.bodySmall,
+                    color = textColor.copy(alpha = 0.7f), // 時間戳顏色稍暗
+                    modifier = Modifier.align(Alignment.End).padding(top = 4.dp)
+                )
+                */
+            }
         }
     }
 }
 
-
-// --- 底部輸入區域 ---
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * 用於顯示聊天輸入框和發送按鈕的 Composable。
+ */
 @Composable
-private fun MessageInputArea(
-    messageInput: String,
-    onInputChange: (String) -> Unit,
-    onSendMessage: () -> Unit,
-    modifier: Modifier = Modifier
+fun ChatInput(
+    value: String,                     // 輸入框的當前值
+    onValueChange: (String) -> Unit, // 輸入值變化時的回調
+    onSendClick: () -> Unit,           // 點擊發送按鈕的回調
+    enabled: Boolean = true            // 控制輸入區域是否可用
 ) {
-    Surface( // 給輸入區域加個背景和陰影
-        modifier = modifier,
-        tonalElevation = 3.dp // 比消息列表高一點的陰影
+    // 使用 Surface 可以在視覺上將輸入區域與消息列表分開，並可設置陰影
+    Surface(
+        tonalElevation = 4.dp, // 添加輕微的海拔陰影效果
+        modifier = Modifier.fillMaxWidth() // 佔滿父佈局寬度
     ) {
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 8.dp), // 輸入區域內邊距
-            verticalAlignment = Alignment.Bottom // 讓輸入框和按鈕底部對齊
+                .padding(horizontal = 8.dp, vertical = 8.dp), // 輸入區域的內邊距
+            verticalAlignment = Alignment.CenterVertically // 垂直居中對齊輸入框和按鈕
         ) {
-            // 可以加一個 "+" 按鈕用於附件
-            IconButton(
-                onClick = { /* TODO: 附件菜單 */ },
-                modifier = Modifier.align(Alignment.CenterVertically)
-            ) {
-                Icon(Icons.Filled.AddCircleOutline, contentDescription = "附加文件")
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-
-            // 輸入框 (使用 BasicTextField 可能更靈活)
-            OutlinedTextField( // 或者 TextField
-                value = messageInput,
-                onValueChange = onInputChange,
-                modifier = Modifier.weight(1f), // 佔滿中間空間
-                placeholder = { Text("輸入消息...") },
-
-                // 設置最大行數和自適應高度 (需要實驗)
-                // maxLines = 5,
-                shape = RoundedCornerShape(24.dp), // 圓角輸入框
-                // 自定義顏色和內邊距   outlinedTextFieldColors
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.Transparent,
-                    unfocusedBorderColor = Color.Transparent
-                )
-                //OutlinedTextField 的內這個錯誤 None of the following candidates is applicable 發生在調用 OutlinedTextField 時，
-                //意味著你傳遞給函數的參數組合與 OutlinedTextField 的任何一個可用重載版本的簽名都不匹配。
-                //錯誤信息列邊距通常由其內部實現和傳遞給 colors 的配置（或者其 modifier 的 padding）來控制，
-                // 它沒有直接的 contentPadding 參數
-//                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier.weight(1f), // 讓輸入框佔據大部分空間
+                placeholder = { Text("輸入消息...") }, // 提示文字
+                shape = RoundedCornerShape(24.dp),   // 圓角邊框
+                enabled = enabled,                 // 控制是否可編輯
+                maxLines = 5,                      // 限制最大行數，防止無限增高
+                // 可以添加鍵盤選項，例如在鍵盤上顯示發送按鈕
+                // keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                // keyboardActions = KeyboardActions(onSend = { onSendClick() })
             )
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(8.dp)) // 輸入框和按鈕之間的間距
 
-            // 發送按鈕 (根據輸入內容切換?)
-            val isInputEmpty = messageInput.isBlank()
-            Button( // 或者用 IconButton
-                onClick = {
-                    if (!isInputEmpty) onSendMessage() else { /* 處理空狀態點擊? */
-                    }
-                },
-                modifier = Modifier
-                    .align(Alignment.CenterVertically)
-                    .size(48.dp), // 控制按鈕大小
-                shape = CircleShape, // 圓形按鈕
-                contentPadding = PaddingValues(0.dp), // 移除默認 padding
-                enabled = !isInputEmpty // 輸入為空時禁用 (或改變圖標)
+            // 發送按鈕
+            IconButton(
+                onClick = onSendClick,
+                // 只有在輸入框有內容且輸入區域啟用時才可點擊
+                enabled = value.isNotBlank() && enabled,
+                modifier = Modifier.size(48.dp) // 設置固定大小
             ) {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "發送消息"
+                    imageVector = Icons.Filled.Send,
+                    contentDescription = "發送消息",
+                    // 按鈕啟用時使用主題色，禁用時使用灰色
+                    tint = if (value.isNotBlank() && enabled) MaterialTheme.colorScheme.primary else Color.Gray
                 )
             }
         }
     }
 }
 
-// --- Previews ---
-// Preview 可能需要創建 Mock ViewModel 或提供靜態數據
-// ... (省略 ChatDetailScreen 預覽，因為它依賴 ViewModel)
-
-@Preview(showBackground = true)
-@Composable
-fun ChatDetailTopBarPreview() {
-    JJLLTheme {
-        val profile = UserProfile("id", "contact_user", "聊天對象")
-        ChatDetailTopBar(
-            contactProfile = profile,
-            isLoading = false,
-            onBackClick = {},
-            onVideoCallClick = {},
-            onMenuClick = {})
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun MessageBubbleSentPreview() {
-    JJLLTheme {
-        val msg = Message(1L, "me", "other", "這是我發送的消息", "10:00")
-        MessageBubble(message = msg, isSentByMe = true)
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun MessageBubbleReceivedPreview() {
-    JJLLTheme {
-        val msg = Message(2L, "other", "me", "這是收到的消息，可能會長一點換行看看效果。", "10:01")
-        MessageBubble(message = msg, isSentByMe = false)
-    }
-}
-
-
-@Preview(showBackground = true)
-@Composable
-fun MessageInputAreaPreview() {
-    JJLLTheme {
-        var text by remember { mutableStateOf("輸入一些文字") }
-        MessageInputArea(
-            messageInput = text,
-            onInputChange = { text = it },
-            onSendMessage = {}
-        )
-    }
-}
+// --- 輔助函數 ---
+// 需要您實現時間戳格式化邏輯
+// fun formatTimestamp(timestamp: String?): String { ... }

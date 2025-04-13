@@ -1,84 +1,62 @@
 package com.example.jjll
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Box
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.lifecycleScope // 導入 lifecycleScope
+import com.example.jjll.ui.auth.AuthViewModel
 import com.example.jjll.ui.navigation.AppDestinations
 import com.example.jjll.ui.navigation.JJLLAppNavigation
-import com.example.jjll.ui.theme.JJLLTheme // 替換成你的主題路徑
+import com.example.jjll.ui.theme.JJLLTheme
 import dagger.hilt.android.AndroidEntryPoint
-import io.github.jan.supabase.SupabaseClient
-import io.github.jan.supabase.auth.auth
-import io.github.jan.supabase.auth.status.SessionStatus
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map // 導入 map
-import kotlinx.coroutines.launch
-import javax.inject.Inject // 導入 Inject
 
-@AndroidEntryPoint // 告訴 Hilt 可以向這個 Activity 注入依賴
+
+@AndroidEntryPoint // 標記 Activity 以啟用 Hilt 注入
 class MainActivity : ComponentActivity() {
 
-    @Inject // Hilt 將在此處注入 AppModule 中提供的 SupabaseClient 實例
-    lateinit var supabaseClient: SupabaseClient
+    // 使用 Hilt 注入 AuthViewModel
+    private val authViewModel: AuthViewModel by viewModels()  //import androidx.activity.viewModels
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 使用 State 來決定初始頁面（初始為加載中）
-        var startDestination by mutableStateOf<String?>(null) // 初始為 null
-        var isLoading by mutableStateOf(true) // 添加一個顯式的加載狀態
 
-        lifecycleScope.launch {
-            supabaseClient.auth.sessionStatus
-                .map { it is SessionStatus.Authenticated }
-                .distinctUntilChanged()
-                .collect { isAuthenticated ->
-                    startDestination = if (isAuthenticated) {
-                        AppDestinations.MAIN_ROUTE // 使用定義的路由常量
-                    } else {
-                        AppDestinations.LOGIN_ROUTE // 使用定義的路由常量
-                    }
-                    isLoading = false // 狀態確定，結束加載
-                    println("Auth state checked: isAuthenticated=$isAuthenticated, startDestination=$startDestination")
-                }
-        }
+        // --- 決定初始導航目標 ---
+        // 在設置 Compose 內容之前，檢查用戶的初始登錄狀態
+        // 這裡假設 AuthViewModel 提供了一個簡單的方法來同步檢查初始狀態
+        // (更複雜的場景可能需要觀察 Flow 或使用 Splash Screen)
+        val startDestination = determineStartDestination()
 
         setContent {
-            JJLLTheme {
+            JJLLTheme { // 應用主題
+                // A surface container using the 'background' color from the theme
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    if (isLoading) { // 根據 isLoading 狀態顯示加載指示器
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator() // 更好的加載指示
-                        }
-                    } else if (startDestination != null) { // 確保 startDestination 已確定
-                        // 在這裡設置 NavHost
-                        JJLLAppNavigation(startDestination = startDestination!!) // 使用非空斷言，因為已檢查 isLoading
-                    } else {
-                        // 可以顯示一個錯誤狀態或回退狀態，理論上不應該到達這裡
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("無法確定初始頁面")
-                        }
-                    }
+                    // 啟動主導航圖，傳入確定的起始路由
+                    JJLLAppNavigation(startDestination = startDestination)
                 }
             }
+        }
+    }
+
+    /**
+     * 輔助函數：根據初始認證狀態決定起始路由。
+     */
+    private fun determineStartDestination(): String {
+        // 調用 ViewModel (或直接 Repository) 的方法檢查用戶是否已登錄
+        // 假設 isUserLoggedInInitially() 是一個簡單的同步檢查
+        return if (authViewModel.isUserLoggedInInitially()) {
+            Log.d("MainActivity", "用戶已登錄，起始頁面設置為 main")
+            "main" // 主屏幕流程的路由名
+        } else {
+            Log.d("MainActivity", "用戶未登錄，起始頁面設置為 Login")
+            AppDestinations.Login.route // 登錄頁面的路由名
         }
     }
 }
