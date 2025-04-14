@@ -1,5 +1,6 @@
 package com.example.jjll.ui.navigation
 
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -51,9 +52,11 @@ fun JJLLAppNavigation(
         composable(route = AppDestinations.Registration.route) {
             RegistrationScreen(
                 onRegistrationSuccess = {
+                    Log.d("NavHost", "onRegistrationSuccess lambda called. Navigating to Login.") // 加個日誌確認
                     // 註冊成功後，導航回登錄頁面
                     navController.navigate(AppDestinations.Login.route) {
                         popUpTo(AppDestinations.Registration.route) { inclusive = true }
+                        launchSingleTop = true // 避免重複創建登錄頁
                     }
                 },
                 onNavigateBackToLogin = {
