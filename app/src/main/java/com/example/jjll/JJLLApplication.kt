@@ -11,6 +11,6 @@ class JJLLApplication  : Application() {
     // 未來可以在這裡做一些全局初始化工作 (如果需要的話)
     override fun onCreate() {
         super.onCreate()
-        // 例如：全局日誌庫初始化等
+        // 可以在這裡進行一些全局初始化，如果需要的話
     }
 }

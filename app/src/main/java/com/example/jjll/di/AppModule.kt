@@ -1,77 +1,46 @@
-package com.example.jjll.di // 確保包名正確
+package com.example.jjll.di
 
-
-import com.example.jjll.BuildConfig
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import io.github.jan.supabase.SupabaseClient
-import io.github.jan.supabase.annotations.SupabaseInternal
 import io.github.jan.supabase.auth.Auth
-import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
-import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.realtime.Realtime
-import io.github.jan.supabase.realtime.realtime
 import io.github.jan.supabase.storage.Storage
-import io.github.jan.supabase.storage.storage
 import javax.inject.Singleton
 
-/*
-* 現在我們來設置 Hilt，讓它可以提供 (Provide) 一個單例的 (Singleton) SupabaseClient 實例給我們 App 的其他部分使用。
-* */
 
 @Module
-@InstallIn(SingletonComponent::class) // 表示這個 Module 提供的依賴在 Application 生命周期內是單例
+@InstallIn(SingletonComponent::class)
 object AppModule {
-
-    @OptIn(SupabaseInternal::class)
     @Provides
-    @Singleton // 標記提供的 SupabaseClient 是單例
+    @Singleton
     fun provideSupabaseClient(): SupabaseClient {
         return createSupabaseClient(
-            // 使用 BuildConfig 安全地獲取 URL 和 Key
-            //import com.example.jjll.BuildConfig
-            supabaseUrl = BuildConfig.SUPABASE_URL,
-            supabaseKey = BuildConfig.SUPABASE_ANON_KEY
+            supabaseUrl = "https://egqabugxkpnhvkeuarys.supabase.co",
+            supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVncWFidWd4a3BuaHZrZXVhcnlzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDM4NDYzNTcsImV4cCI6MjA1OTQyMjM1N30.xtF_0nR2hDXrqVWOOb1JJ_D3oRRzlk9aMB8SzboUG6Y"
         ) {
-            // 安裝你需要的功能模塊
-            install(Auth)
-            install(Postgrest)
-            install(Realtime) {
-                // Realtime 的可選配置 (例如重連間隔等)
-                // reconnectionInterval = 10.seconds
+            // 安裝 Supabase 插件
+            install(Auth) { // <--- 修改: 使用 Auth 而不是 GoTrue
+                // Auth (原 GoTrue) 的特定配置 (可選)
+                // e.g., autoLoadFromStorage = true (默認)
+                // e.g., autoSaveToStorage = true (默認)
+                // e.g., scheme = "app"
+                // e.g., host = "login"
+                // 如果使用 OAuth deep linking，可能需要配置 scheme 和 host
             }
-            install(Storage)
-
-            // 配置 Ktor client engine (CIO 通常是不錯的選擇 for Android)
-            // ktorEngine = CIO.create() // 可選, Supabase-kt 會提供默認引擎
+            install(Postgrest) {
+                // Postgrest 的特定配置 (可選)
+            }
+            install(Realtime) {
+                // Realtime 的特定配置 (可選)
+            }
+            install(Storage) {
+                // Storage 的特定配置 (可選)
+            }
         }
-    }
-
-    // 我們可以直接從 SupabaseClient 中獲取 Auth, Postgrest 等實例
-    // 但如果你想單獨注入它們，可以這樣提供：
-    @Provides
-    @Singleton
-    fun provideSupabaseAuth(client: SupabaseClient): Auth = client.auth
-
-    @Provides
-    @Singleton
-    fun provideSupabaseDatabase(client: SupabaseClient): Postgrest = client.postgrest // <-- 確保這個提供函數存在
-
-    @Provides
-    @Singleton
-    fun provideSupabaseRealtime(client: SupabaseClient): Realtime {
-        // 注意: 你需要先連接 Realtime 才能使用
-        // client.realtime.connect() // 不建議在這裡連接，應該在需要時管理連接狀態
-        return client.realtime
-    }
-
-    @Provides
-    @Singleton
-    fun provideSupabaseStorage(client: SupabaseClient): Storage {
-        return client.storage
     }
 }
